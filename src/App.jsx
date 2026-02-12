@@ -84,7 +84,35 @@ const chatAPI = async (sys, msgs) => {
   return (d.content || []).map((b) => b.text || "").join("");
 };
 
-const ovP = `You are the Envisionit RFP/RFI Analyst. Return JSON: {"opportunity_title":"","issuing_org":"","type":"RFP|RFI|RFQ","industry":"","scope_summary":"","services_requested":[],"budget":"","contract_duration":"","incumbent":"","strategic_fit":"","submission_deadline":"","critical_dates":[{"date":"","milestone":"","days_until":0}],"evaluation_criteria":[{"category":"","weight":"","notes":""}],"submission_requirements":[],"top_scoring_areas":[]} Extract exact dates, dollars, requirements. "Not specified in document." if missing. CONTEXT: ${REL_EXP}${SJ}`;
+// Calculate days from user's local today to a date string
+const calcDaysUntil = (dateStr) => {
+  if (!dateStr || dateStr === "Not specified in document.") return null;
+  try {
+    const target = new Date(dateStr);
+    if (isNaN(target.getTime())) return null;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tgt = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+    return Math.round((tgt - today) / (1000 * 60 * 60 * 24));
+  } catch { return null; }
+};
+
+// Post-process overview to recalculate days_until from local system time
+const fixDates = (ov) => {
+  if (!ov) return ov;
+  if (ov.critical_dates?.length) {
+    ov.critical_dates = ov.critical_dates.map((d) => ({
+      ...d,
+      days_until: calcDaysUntil(d.date),
+    }));
+  }
+  if (ov.submission_deadline) {
+    ov._deadline_days = calcDaysUntil(ov.submission_deadline);
+  }
+  return ov;
+};
+
+const ovP = `You are the Envisionit RFP/RFI Analyst. Return JSON: {"opportunity_title":"","issuing_org":"","type":"RFP|RFI|RFQ","industry":"","scope_summary":"","services_requested":[],"budget":"","contract_duration":"","incumbent":"","strategic_fit":"","submission_deadline":"","critical_dates":[{"date":"","milestone":""}],"evaluation_criteria":[{"category":"","weight":"","notes":""}],"submission_requirements":[],"top_scoring_areas":[]} Extract exact dates (use ISO format YYYY-MM-DD for all dates), dollars, requirements. "Not specified in document." if missing. CONTEXT: ${REL_EXP}${SJ}`;
 
 const dP = (dn) =>
   `You are the Envisionit RFP/RFI Analyst. For each department extract SPECIFIC questions to answer, deliverables to produce, requirements/constraints. Quote RFP language with section refs. Depts: ${dn.join(", ")}. Return JSON: {"${dn[0]}":{"questions":[],"deliverables":[],"requirements":[],"notes":""},"${dn[1]}":{"questions":[],"deliverables":[],"requirements":[],"notes":""},"${dn[2]}":{"questions":[],"deliverables":[],"requirements":[],"notes":""}}${SJ}`;
@@ -145,7 +173,7 @@ const hOv = (o) => {
   if (o.services_requested?.length) h += `<h3 style="color:#f8fafc">Services Requested</h3><div class="tgs">${o.services_requested.map((s) => `<span class="tg">${s}</span>`).join("")}</div>`;
   if (o.critical_dates?.length) {
     h += `<h3 style="color:#f8fafc">Critical Dates</h3><table class="tb"><tr><th>Milestone</th><th>Date</th><th>Days</th></tr>`;
-    o.critical_dates.forEach((d) => { h += `<tr><td>${d.milestone}</td><td>${d.date}</td><td><span class="bg ${(d.days_until ?? 99) <= 7 ? "bgr" : "bgg"}">${d.days_until ?? "\u2014"}d</span></td></tr>`; });
+    o.critical_dates.forEach((d) => { const du = d.days_until; const cls = du !== null && du !== undefined && du <= 7 ? "bgr" : "bgg"; const lbl = du !== null && du !== undefined ? (du < 0 ? `${Math.abs(du)}d ago` : `${du}d`) : "\u2014"; h += `<tr><td>${d.milestone}</td><td>${d.date}</td><td><span class="bg ${cls}">${lbl}</span></td></tr>`; });
     h += `</table>`;
   }
   if (o.evaluation_criteria?.length) {
@@ -365,7 +393,8 @@ export default function App() {
 
     try {
       addProg("Analyzing executive overview...");
-      const ov = await callAPI(ovP, bC("Focus on overview, dates, eval criteria, submission reqs."));
+      const ovRaw = await callAPI(ovP, bC("Focus on overview, dates, eval criteria, submission reqs."));
+      const ov = fixDates(ovRaw);
       setResults((r) => { const n = { ...r, overview: ov }; resultsRef.current = n; return n; });
       setReadySections((s) => new Set([...s, ...PHASE_SECTIONS[0]]));
       setCompletedPhases(1);
@@ -435,6 +464,7 @@ export default function App() {
   const loadSaved = (id) => {
     const d = ldAn(id);
     if (d) {
+      if (d.overview) fixDates(d.overview);
       setResults(d); resultsRef.current = d; setSaveId(id); setStatus("complete");
       setActiveTab("overview"); setView("results"); setSaveMsg("");
       setReadySections(new Set(SECTIONS.map((s) => s.id))); setChatMsgs([]);
@@ -599,7 +629,7 @@ export default function App() {
         {ov.scope_summary && <div><h3 style={{ fontSize: 15, fontWeight: 600, color: "#f8fafc", margin: "0 0 8px" }}>Scope Summary</h3><p style={{ fontSize: 14, color: "#cbd5e1", lineHeight: 1.7, margin: 0 }}>{ov.scope_summary}</p></div>}
         {ov.strategic_fit && <div style={{ padding: 14, borderRadius: 10, background: "rgba(34,211,238,0.05)", border: "1px solid rgba(34,211,238,0.15)" }}><h3 style={{ fontSize: 14, fontWeight: 600, color: "#22d3ee", margin: "0 0 6px" }}>Strategic Fit</h3><p style={{ fontSize: 14, color: "#cbd5e1", lineHeight: 1.6, margin: 0 }}>{ov.strategic_fit}</p></div>}
         {ov.services_requested?.length > 0 && <div><h3 style={{ fontSize: 15, fontWeight: 600, color: "#f8fafc", margin: "0 0 10px" }}>Services Requested</h3><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{ov.services_requested.map((s, i) => <span key={i} style={{ padding: "5px 12px", borderRadius: 20, background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.2)", color: "#22d3ee", fontSize: 13 }}>{s}</span>)}</div></div>}
-        {ov.critical_dates?.length > 0 && <div><h3 style={{ fontSize: 15, fontWeight: 600, color: "#f8fafc", margin: "0 0 12px" }}>Critical Dates</h3><div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #1e293b" }}>{ov.critical_dates.map((d, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", background: i % 2 === 0 ? "rgba(15,23,42,0.5)" : "rgba(30,41,59,0.3)", alignItems: "center" }}><span style={{ fontSize: 14, color: "#cbd5e1", flex: 1 }}>{d.milestone}</span><div style={{ display: "flex", gap: 12, alignItems: "center", flexShrink: 0 }}><span style={{ fontSize: 13, color: "#94a3b8" }}>{d.date}</span>{d.days_until !== undefined && <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 10, background: d.days_until <= 7 ? "rgba(239,68,68,0.2)" : "rgba(51,65,85,0.5)", color: d.days_until <= 7 ? "#fca5a5" : "#94a3b8", fontWeight: 600 }}>{d.days_until}d</span>}</div></div>)}</div></div>}
+        {ov.critical_dates?.length > 0 && <div><h3 style={{ fontSize: 15, fontWeight: 600, color: "#f8fafc", margin: "0 0 12px" }}>Critical Dates</h3><div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #1e293b" }}>{ov.critical_dates.map((d, i) => { const du = d.days_until; const urgent = du !== null && du !== undefined && du <= 7; const past = du !== null && du !== undefined && du < 0; const lbl = du !== null && du !== undefined ? (past ? `${Math.abs(du)}d ago` : `${du}d`) : null; return <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", background: i % 2 === 0 ? "rgba(15,23,42,0.5)" : "rgba(30,41,59,0.3)", alignItems: "center" }}><span style={{ fontSize: 14, color: "#cbd5e1", flex: 1 }}>{d.milestone}</span><div style={{ display: "flex", gap: 12, alignItems: "center", flexShrink: 0 }}><span style={{ fontSize: 13, color: "#94a3b8" }}>{d.date}</span>{lbl !== null && <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 10, background: urgent || past ? "rgba(239,68,68,0.2)" : "rgba(51,65,85,0.5)", color: urgent || past ? "#fca5a5" : "#94a3b8", fontWeight: 600 }}>{lbl}</span>}</div></div>; })}</div></div>}
         {ov.evaluation_criteria?.length > 0 && <div><h3 style={{ fontSize: 15, fontWeight: 600, color: "#f8fafc", margin: "0 0 12px" }}>Evaluation Criteria</h3><div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #1e293b" }}>{ov.evaluation_criteria.map((c, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", background: i % 2 === 0 ? "rgba(15,23,42,0.5)" : "rgba(30,41,59,0.3)", alignItems: "center" }}><div><span style={{ fontSize: 14, color: "#cbd5e1" }}>{c.category}</span>{c.notes && <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{c.notes}</div>}</div><span style={{ fontSize: 14, color: "#22d3ee", fontWeight: 700, flexShrink: 0 }}>{c.weight}</span></div>)}</div></div>}
         {ov.top_scoring_areas?.length > 0 && <div style={{ padding: 16, borderRadius: 10, background: "rgba(34,211,238,0.05)", border: "1px solid rgba(34,211,238,0.15)" }}><h3 style={{ fontSize: 14, fontWeight: 700, color: "#22d3ee", margin: "0 0 10px" }}>{"\u{1F3AF}"} Top Areas to Invest Effort</h3>{ov.top_scoring_areas.map((a, i) => <div key={i} style={{ fontSize: 14, color: "#cbd5e1", padding: "5px 0", lineHeight: 1.5 }}>{i + 1}. {a}</div>)}</div>}
       </div>
