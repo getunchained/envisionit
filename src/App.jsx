@@ -47,7 +47,7 @@ const callAPI = async (sys, content, retries = 2) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
+          model: "claude-opus-4-20250514",
           max_tokens: 4096,
           system: sys + (a > 0 ? "\nCRITICAL: ONLY raw JSON. Start { end }." : ""),
           messages: [{ role: "user", content }],
@@ -72,7 +72,7 @@ const chatAPI = async (sys, msgs) => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-opus-4-20250514",
       max_tokens: 2048,
       system: sys,
       messages: msgs,
@@ -183,7 +183,7 @@ const hCk = (g) => {
 };
 
 const mkHTML = (body, t) =>
-  `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${t}</title><style>${CSS}</style></head><body><div class="br">Envisionit</div><h1>${t}</h1><p class="mt" style="margin-bottom:8px">Generated ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p><hr style="border:none;border-top:1px solid #1e293b;margin:16px 0">${body}</body></html>`;
+  `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${t}</title><style>${CSS}</style></head><body><div class="br">Envisionit</div><h1>${t}</h1><p class="mt" style="margin-bottom:8px">Generated ${fmtDate(new Date())} at ${fmtTime()}</p><hr style="border:none;border-top:1px solid #1e293b;margin:16px 0">${body}</body></html>`;
 
 const dlHTML = (h, f) => {
   const b = new Blob([h], { type: "text/html;charset=utf-8" });
@@ -215,7 +215,90 @@ const expFull = (res) => {
   return { html: mkHTML(b, `Full Report \u2014 ${t}`), title: t };
 };
 
-const BT = (bg) => ({ padding: "7px 14px", borderRadius: 7, border: "none", background: bg, color: "#e2e8f0", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" });
+const BT = (bg, disabled) => ({ padding: "7px 14px", borderRadius: 7, border: "none", background: disabled ? "#334155" : bg, color: disabled ? "#64748b" : "#e2e8f0", fontSize: 13, fontWeight: 600, cursor: disabled ? "default" : "pointer", whiteSpace: "nowrap", opacity: disabled ? 0.5 : 1 });
+
+// Local date/time formatting
+const fmtDateTime = (d) => new Date(d).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const fmtDate = (d) => new Date(d).toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+const fmtTime = () => new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+// PDF export (uses browser print)
+const dlPDF = (htmlContent, title) => {
+  const w = window.open("", "_blank");
+  if (!w) { alert("Please allow popups to export PDF"); return; }
+  w.document.write(htmlContent);
+  w.document.close();
+  w.document.title = title;
+  setTimeout(() => { w.print(); }, 500);
+};
+
+// Excel export (generates real .xlsx-compatible HTML table)
+const buildExcelHTML = (res) => {
+  const { overview: o = {}, departments: ds = {}, gonogo: g = {} } = res;
+  let rows = [];
+  // Overview sheet data
+  rows.push(["EXECUTIVE OVERVIEW", "", ""]);
+  rows.push(["Field", "Value", ""]);
+  [["Opportunity", o.opportunity_title], ["Issuing Org", o.issuing_org], ["Type", o.type], ["Industry", o.industry], ["Budget", o.budget], ["Duration", o.contract_duration], ["Incumbent", o.incumbent], ["Deadline", o.submission_deadline], ["Scope", o.scope_summary], ["Strategic Fit", o.strategic_fit]].forEach(([k, v]) => rows.push([k, v || "\u2014", ""]));
+  if (o.services_requested?.length) rows.push(["Services Requested", o.services_requested.join("; "), ""]);
+  rows.push(["", "", ""]);
+  // Critical dates
+  if (o.critical_dates?.length) {
+    rows.push(["CRITICAL DATES", "", ""]);
+    rows.push(["Milestone", "Date", "Days Until"]);
+    o.critical_dates.forEach((d) => rows.push([d.milestone, d.date, d.days_until ?? ""]));
+    rows.push(["", "", ""]);
+  }
+  // Eval criteria
+  if (o.evaluation_criteria?.length) {
+    rows.push(["EVALUATION CRITERIA", "", ""]);
+    rows.push(["Category", "Weight", "Notes"]);
+    o.evaluation_criteria.forEach((c) => rows.push([c.category, c.weight, c.notes || ""]));
+    rows.push(["", "", ""]);
+  }
+  // Department sections
+  DEPTS.forEach((dept) => {
+    const d = ds[dept.id];
+    if (!d) return;
+    rows.push([`${dept.name.toUpperCase()}`, "", ""]);
+    if (d.questions?.length) { rows.push(["Questions", "", ""]); d.questions.forEach((q) => rows.push(["", typeof q === "string" ? q : q.task || "", ""])); }
+    if (d.deliverables?.length) { rows.push(["Deliverables", "", ""]); d.deliverables.forEach((q) => rows.push(["", typeof q === "string" ? q : q.task || "", ""])); }
+    if (d.requirements?.length) { rows.push(["Requirements", "", ""]); d.requirements.forEach((q) => rows.push(["", typeof q === "string" ? q : q.task || "", ""])); }
+    if (d.notes) rows.push(["Notes", d.notes, ""]);
+    rows.push(["", "", ""]);
+  });
+  // Go/No-Go
+  rows.push(["GO / NO-GO ASSESSMENT", "", ""]);
+  rows.push(["Recommendation", g.recommendation || "", ""]);
+  rows.push(["Rationale", g.rationale || "", ""]);
+  if (g.strengths?.length) { rows.push(["Strengths", "", ""]); g.strengths.forEach((s) => rows.push(["", typeof s === "string" ? s : "", ""])); }
+  if (g.risks?.length) { rows.push(["Risks", "", ""]); g.risks.forEach((s) => rows.push(["", typeof s === "string" ? s : "", ""])); }
+  if (g.open_questions?.length) { rows.push(["Open Questions", "", ""]); g.open_questions.forEach((s) => rows.push(["", typeof s === "string" ? s : "", ""])); }
+  rows.push(["", "", ""]);
+  // Checklist
+  if (g.checklist?.length) {
+    rows.push(["MASTER CHECKLIST", "", ""]);
+    rows.push(["Task", "Owner", "Category"]);
+    g.checklist.forEach((i) => rows.push([i.task, i.owner, i.category || ""]));
+  }
+  const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const tableRows = rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("\n");
+  return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>RFP Analysis</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table>${tableRows}</table></body></html>`;
+};
+
+const dlExcel = (res, title) => {
+  const html = buildExcelHTML(res);
+  const b = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const u = URL.createObjectURL(b);
+  const a = document.createElement("a");
+  a.href = u;
+  a.download = `${title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40)}.xls`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(u);
+};
+
+// Total phases for percentage calculation
+const TOTAL_PHASES = 5;
 
 const PHASE_SECTIONS = {
   0: ["overview"],
@@ -245,6 +328,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [docText, setDocText] = useState("");
+  const [completedPhases, setCompletedPhases] = useState(0);
   const fileRef = useRef();
   const chatEndRef = useRef();
   const chatInputRef = useRef();
@@ -254,7 +338,7 @@ export default function App() {
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMsgs, chatLoading]);
   useEffect(() => { resultsRef.current = results; }, [results]);
 
-  const addProg = useCallback((m) => setProgress((p) => [...p, { msg: m, time: new Date().toLocaleTimeString() }]), []);
+  const addProg = useCallback((m) => setProgress((p) => [...p, { msg: m, time: fmtTime() }]), []);
 
   const handleFile = (e) => {
     const f = e.target.files?.[0];
@@ -276,7 +360,7 @@ export default function App() {
   const analyze = useCallback(async () => {
     setStatus("analyzing"); setResults({}); setProgress([]); setError("");
     setActiveTab("overview"); setSaveId(null); setSaveMsg(""); setReadySections(new Set());
-    setChatMsgs([]); setView("results");
+    setChatMsgs([]); setView("results"); setCompletedPhases(0);
     if (paste) setDocText(paste); else setDocText("[PDF document uploaded]");
 
     try {
@@ -284,24 +368,28 @@ export default function App() {
       const ov = await callAPI(ovP, bC("Focus on overview, dates, eval criteria, submission reqs."));
       setResults((r) => { const n = { ...r, overview: ov }; resultsRef.current = n; return n; });
       setReadySections((s) => new Set([...s, ...PHASE_SECTIONS[0]]));
+      setCompletedPhases(1);
       addProg("\u2713 Executive overview complete");
 
       addProg("Strategy, Creative, Media...");
       const b1 = await callAPI(dP(["strategy", "creative", "media"]), bC("Strategy, Creative, Media depts."));
       if (b1) setResults((r) => { const n = { ...r, departments: { ...r.departments, ...b1 } }; resultsRef.current = n; return n; });
       setReadySections((s) => new Set([...s, ...PHASE_SECTIONS[1]]));
+      setCompletedPhases(2);
       addProg("\u2713 Strategy, Creative, Media complete");
 
       addProg("SEO/Web, Data, Client Service...");
       const b2 = await callAPI(dP(["seo_web", "data", "client"]), bC("SEO & Web, Data & Analytics, Client Service."));
       if (b2) setResults((r) => { const n = { ...r, departments: { ...r.departments, ...b2 } }; resultsRef.current = n; return n; });
       setReadySections((s) => new Set([...s, ...PHASE_SECTIONS[2]]));
+      setCompletedPhases(3);
       addProg("\u2713 SEO/Web, Data, Client Service complete");
 
       addProg("PM, Finance, Operations...");
       const b3 = await callAPI(dP(["pm", "finance", "ops"]), bC("Project Management, Finance, Operations/Legal."));
       if (b3) setResults((r) => { const n = { ...r, departments: { ...r.departments, ...b3 } }; resultsRef.current = n; return n; });
       setReadySections((s) => new Set([...s, ...PHASE_SECTIONS[3]]));
+      setCompletedPhases(4);
       addProg("\u2713 PM, Finance, Operations complete");
 
       addProg("Go/No-Go assessment...");
@@ -310,6 +398,7 @@ export default function App() {
       setReadySections((s) => new Set([...s, ...PHASE_SECTIONS[4]]));
       addProg("\u2713 Go/No-Go complete");
 
+      setCompletedPhases(5);
       addProg("\u{1F389} Analysis complete!");
       setStatus("complete");
     } catch (err) {
@@ -362,6 +451,7 @@ export default function App() {
     setView("home"); setStatus("idle"); setResults({}); setProgress([]);
     setFName(""); setFData(null); setPaste(""); setError(""); setSaveId(null);
     setSaveMsg(""); setReadySections(new Set()); setChatOpen(false); setChatMsgs([]);
+    setCompletedPhases(0);
   };
 
   const canSubmit = fData || paste.trim().length > 100;
@@ -398,7 +488,7 @@ export default function App() {
                         {i.org && <span>{i.org}</span>}
                         {i.deadline && <span>{"\u{1F4C5}"} {i.deadline}</span>}
                         {i.rec && <span style={{ color: i.rec === "GO" ? "#34d399" : i.rec === "NO-GO" ? "#f87171" : "#fbbf24", fontWeight: 600 }}>{i.rec}</span>}
-                        <span>{new Date(i.date).toLocaleDateString()}</span>
+                        <span>{fmtDateTime(i.date)}</span>
                       </div>
                     </div>
                     <button onClick={(e) => { e.stopPropagation(); deleteSaved(i.id); }} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: "#64748b", fontSize: 12, cursor: "pointer" }}>{"\u{1F5D1}"}</button>
@@ -574,7 +664,7 @@ export default function App() {
           );
         })}
         <div style={{ marginTop: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-          {(status === "complete" || Object.keys(results).length > 0) && (
+          {status === "complete" && (
             <button onClick={handleSave} style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "none", background: saveId ? "#1e293b" : "#0891b2", color: saveId ? "#64748b" : "#0f172a", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               {saveMsg || (saveId ? "\u2713 Saved" : "\u{1F4BE} Save")}
             </button>
@@ -590,14 +680,18 @@ export default function App() {
 
       {/* Main */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        {isAnalyzing && (
-          <div style={{ padding: "8px 16px", background: "rgba(34,211,238,0.05)", borderBottom: "1px solid #1e293b", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            <div style={{ height: 4, flex: 1, borderRadius: 2, background: "#1e293b", overflow: "hidden" }}>
-              <div style={{ height: "100%", background: "linear-gradient(90deg, #0891b2, #22d3ee)", borderRadius: 2, width: `${Math.min(95, (readySections.size / SECTIONS.length) * 100)}%`, transition: "width 0.5s" }} />
+        {isAnalyzing && (() => {
+          const pct = Math.round((completedPhases / TOTAL_PHASES) * 100);
+          return (
+            <div style={{ padding: "8px 16px", background: "rgba(34,211,238,0.05)", borderBottom: "1px solid #1e293b", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+              <div style={{ height: 6, flex: 1, borderRadius: 3, background: "#1e293b", overflow: "hidden" }}>
+                <div style={{ height: "100%", background: "linear-gradient(90deg, #0891b2, #22d3ee)", borderRadius: 3, width: `${Math.max(pct, 5)}%`, transition: "width 0.6s ease" }} />
+              </div>
+              <span style={{ fontSize: 13, color: "#22d3ee", fontWeight: 700, whiteSpace: "nowrap", minWidth: 42, textAlign: "right" }}>{pct}%</span>
+              <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{completedPhases}/{TOTAL_PHASES} phases</span>
             </div>
-            <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{readySections.size}/{SECTIONS.length} sections</span>
-          </div>
-        )}
+          );
+        })()}
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           {/* Content area */}
           <div style={{ flex: 1, padding: "28px 36px", overflowY: "auto" }}>
@@ -607,10 +701,12 @@ export default function App() {
                   <span style={{ fontSize: 26 }}>{sec?.icon}</span>
                   <h2 style={{ fontSize: 24, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{sec?.name}</h2>
                 </div>
-                {secReady && (
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button onClick={() => { const { html, title } = expFull(results); dlHTML(html, `Envisionit_RFP_${slug(title)}.html`); }} style={BT("#0891b2")}>{"\u2B07"} Full Report</button>
-                    <button onClick={() => { const { html } = expSec(activeTab, results); dlHTML(html, `${slug(sec?.name || "section")}.html`); }} style={BT("#334155")}>{"\u2B07"} This Section</button>
+                {secReady && status === "complete" && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => { const { html, title } = expFull(results); dlHTML(html, `Envisionit_RFP_${slug(title)}.html`); }} style={BT("#0891b2")}>HTML</button>
+                    <button onClick={() => { const { html, title } = expFull(results); dlPDF(html, title); }} style={BT("#7c3aed")}>PDF</button>
+                    <button onClick={() => { const t = results.overview?.opportunity_title || "RFP_Analysis"; dlExcel(results, t); }} style={BT("#059669")}>Excel</button>
+                    <button onClick={() => { const { html } = expSec(activeTab, results); dlHTML(html, `${slug(sec?.name || "section")}.html`); }} style={BT("#334155")}>This Section</button>
                   </div>
                 )}
               </div>
