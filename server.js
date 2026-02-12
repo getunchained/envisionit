@@ -61,7 +61,7 @@ app.post("/api/messages", async (req, res) => {
 });
 
 // SPA fallback for production
-app.get("*", (_req, res) => {
+app.get("/{*splat}", (_req, res) => {
   res.sendFile(resolve(__dirname, "dist", "index.html"));
 });
 
